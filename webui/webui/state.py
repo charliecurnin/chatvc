@@ -1,11 +1,16 @@
 import os
+import time
 
-import openai
+from openai import OpenAI
 import reflex as rx
 
-openai.api_key = os.environ["OPENAI_API_KEY"]
-openai.api_base = os.getenv("OPENAI_API_BASE", "https://api.openai.com/v1")
+OPENAI_ASSISTANT_ID = "asst_DKJRMWO9yngdaMJCmXpZ23EL"
 
+client = OpenAI(
+	api_key=os.environ["OPENAI_API_KEY"],
+	organization=os.environ["OPENAI_ORG_KEY"]
+)
+thread = client.beta.threads.create()
 
 class QA(rx.Base):
     """A question and answer pair."""
@@ -106,30 +111,30 @@ class State(rx.State):
         yield
 
         # Build the messages.
-        messages = [
-            {"role": "system", "content": "You are a friendly chatbot named Reflex."}
-        ]
-        for qa in self.chats[self.current_chat]:
-            messages.append({"role": "user", "content": qa.question})
-            messages.append({"role": "assistant", "content": qa.answer})
-
-        # Remove the last mock answer.
-        messages = messages[:-1]
-
-        # Start a new session to answer the question.
-        session = openai.ChatCompletion.create(
-            model=os.getenv("OPENAI_MODEL", "gpt-3.5-turbo"),
-            messages=messages,
-            stream=True,
+        qa = self.chats[self.current_chat][-1]
+        client.beta.threads.messages.create(
+            thread_id=thread.id,
+            role="user",
+            content=qa.question,
         )
 
-        # Stream the results, yielding after every word.
-        for item in session:
-            if hasattr(item.choices[0].delta, "content"):
-                answer_text = item.choices[0].delta.content
-                self.chats[self.current_chat][-1].answer += answer_text
-                self.chats = self.chats
-                yield
+        run = client.beta.threads.runs.create(
+            thread_id=thread.id,
+            assistant_id=OPENAI_ASSISTANT_ID
+        )
+
+        while run.status != "completed":
+            time.sleep(0.1)
+            run = client.beta.threads.runs.retrieve(
+                thread_id=thread.id,
+                run_id=run.id
+            )
+
+        messages = client.beta.threads.messages.list(thread.id)
+        message = messages.data[0]
+        answer_text = message.content[0].text.value
+        self.chats[self.current_chat][-1].answer += answer_text
+        self.chats = self.chats
 
         # Toggle the processing flag.
         self.processing = False
